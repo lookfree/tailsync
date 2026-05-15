@@ -30,6 +30,35 @@ pub struct DirectoryPair {
     pub last_sync: Option<LastSync>,
 }
 
+use std::path::Path;
+use std::io::Write;
+
+pub fn load_pairs(path: &Path) -> std::io::Result<Vec<DirectoryPair>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let bytes = std::fs::read(path)?;
+    let pairs: Vec<DirectoryPair> = serde_json::from_slice(&bytes)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    Ok(pairs)
+}
+
+pub fn save_pairs(path: &Path, pairs: &[DirectoryPair]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        let bytes = serde_json::to_vec_pretty(pairs)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        f.write_all(&bytes)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,5 +99,42 @@ mod tests {
         let json = serde_json::to_value(&ls).unwrap();
         assert_eq!(json["direction"], "pull");
         assert_eq!(json["status"], "interrupted");
+    }
+
+    #[test]
+    fn load_returns_empty_when_file_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nope.json");
+        let pairs = load_pairs(&path).unwrap();
+        assert!(pairs.is_empty());
+    }
+
+    #[test]
+    fn save_then_load_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pairs.json");
+        let pairs = vec![DirectoryPair {
+            id: "x".into(),
+            name: "n".into(),
+            local_path: "/a".into(),
+            remote_host: "h".into(),
+            remote_user: "u".into(),
+            remote_path: "/b".into(),
+            excludes: vec![],
+            bandwidth_limit_kbps: None,
+            mirror_mode: false,
+            last_sync: None,
+        }];
+        save_pairs(&path, &pairs).unwrap();
+        let back = load_pairs(&path).unwrap();
+        assert_eq!(pairs, back);
+    }
+
+    #[test]
+    fn save_creates_missing_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("a/b/c/pairs.json");
+        save_pairs(&nested, &[]).unwrap();
+        assert!(nested.exists());
     }
 }
