@@ -3,6 +3,7 @@ pub mod excludes;
 pub mod rsync;
 pub mod tailscale;
 pub mod env_check;
+pub mod sync;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]

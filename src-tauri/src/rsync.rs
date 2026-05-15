@@ -46,6 +46,7 @@ pub fn build_rsync_args(c: &RsyncConfig) -> Vec<String> {
         }
     }
     if c.dry_run {
+        args.push("-i".into());
         args.push("--dry-run".into());
     }
     args.push(c.source.clone());
@@ -199,6 +200,7 @@ mod tests {
         let cfg = RsyncConfig { dry_run: true, ..Default::default() };
         let a = build_rsync_args(&cfg);
         assert!(a.contains(&"--dry-run".into()));
+        assert!(a.contains(&"-i".into()));
     }
 
     #[test]
