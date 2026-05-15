@@ -2,14 +2,8 @@
 
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tailsync_lib::pairs::DirectoryPair;
 use tailsync_lib::sync::SyncManager;
-
-pub struct AppState {
-    pub pairs: Mutex<Vec<DirectoryPair>>,
-    pub pairs_path: PathBuf,
-    pub sync_manager: SyncManager,
-}
+use tailsync_lib::AppState;
 
 fn main() {
     let pairs_path = config_dir().join("pairs.json");
