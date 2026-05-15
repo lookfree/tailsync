@@ -184,4 +184,12 @@ pub async fn start_sync(
 pub async fn cancel_sync(state: State<'_, AppState>, task_id: String) -> AppResult<bool> {
     Ok(state.sync_manager.cancel(&task_id).await)
 }
-#[tauri::command] pub fn open_full_disk_access() -> AppResult<()> { Ok(()) }
+#[tauri::command]
+pub async fn open_full_disk_access() -> AppResult<()> {
+    let url = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
+    std::process::Command::new("open")
+        .arg(url)
+        .status()
+        .map_err(|e| AppError::Io(e.to_string()))?;
+    Ok(())
+}
