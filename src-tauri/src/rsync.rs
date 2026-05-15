@@ -53,6 +53,101 @@ pub fn build_rsync_args(c: &RsyncConfig) -> Vec<String> {
     args
 }
 
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ProgressUpdate {
+    pub bytes_transferred: u64,
+    pub total_bytes: Option<u64>,
+    pub percent: Option<f32>,
+    pub rate_bps: Option<u64>,
+    pub eta_seconds: Option<u64>,
+    pub current_file: Option<String>,
+}
+
+/// Parse one fragment of rsync output. Returns None if the fragment
+/// is not a recognized progress or filename line.
+///
+/// `--info=progress2` prints lines that look like:
+///   "       32,768   0%    0.00kB/s    0:00:00"
+///   "    1,048,576  50%    1.23MB/s    0:00:02 (xfr#1, to-chk=2/4)"
+/// Filenames appear on their own lines (no leading whitespace + digit).
+pub fn parse_progress_line(line: &str) -> Option<ProgressUpdate> {
+    let trimmed = line.trim_end_matches(['\r', '\n']);
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // Heuristic: progress lines start with whitespace + a digit (after removing commas).
+    let leading = trimmed.trim_start();
+    let first_char = leading.chars().next()?;
+    if !first_char.is_ascii_digit() {
+        // Treat as a filename line (rsync prints filenames in verbose mode)
+        return Some(ProgressUpdate {
+            bytes_transferred: 0,
+            total_bytes: None,
+            percent: None,
+            rate_bps: None,
+            eta_seconds: None,
+            current_file: Some(trimmed.to_string()),
+        });
+    }
+
+    // Tokenize. Strip commas in numbers for portability.
+    let tokens: Vec<&str> = leading.split_whitespace().collect();
+    if tokens.len() < 4 {
+        return None;
+    }
+
+    let bytes_str = tokens[0].replace(',', "");
+    let bytes_transferred = bytes_str.parse::<u64>().ok()?;
+
+    let percent = tokens[1]
+        .trim_end_matches('%')
+        .parse::<f32>()
+        .ok();
+
+    let rate_bps = parse_rate(tokens[2]);
+
+    let eta_seconds = parse_eta(tokens[3]);
+
+    Some(ProgressUpdate {
+        bytes_transferred,
+        total_bytes: None,
+        percent,
+        rate_bps,
+        eta_seconds,
+        current_file: None,
+    })
+}
+
+fn parse_rate(s: &str) -> Option<u64> {
+    // examples: "1.23MB/s", "512kB/s", "0.00kB/s"
+    let s = s.trim_end_matches("/s");
+    let (num_str, unit) = s
+        .find(|c: char| c.is_alphabetic())
+        .map(|i| s.split_at(i))?;
+    let n: f64 = num_str.parse().ok()?;
+    let mult = match unit {
+        "B" => 1.0,
+        "kB" | "KB" => 1_024.0,
+        "MB" => 1_024.0 * 1_024.0,
+        "GB" => 1_024.0 * 1_024.0 * 1_024.0,
+        _ => return None,
+    };
+    Some((n * mult) as u64)
+}
+
+fn parse_eta(s: &str) -> Option<u64> {
+    // example: "0:01:23"
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let h: u64 = parts[0].parse().ok()?;
+    let m: u64 = parts[1].parse().ok()?;
+    let sec: u64 = parts[2].parse().ok()?;
+    Some(h * 3600 + m * 60 + sec)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +206,37 @@ mod tests {
         let cfg = RsyncConfig { excludes_file: Some("/tmp/ex".into()), ..Default::default() };
         let a = build_rsync_args(&cfg);
         assert!(a.contains(&"--exclude-from=/tmp/ex".into()));
+    }
+
+    #[test]
+    fn parses_basic_progress() {
+        let line = "    1,048,576  50%    1.23MB/s    0:00:02";
+        let p = parse_progress_line(line).unwrap();
+        assert_eq!(p.bytes_transferred, 1_048_576);
+        assert_eq!(p.percent, Some(50.0));
+        assert!(p.rate_bps.unwrap() > 1_000_000);
+        assert_eq!(p.eta_seconds, Some(2));
+        assert!(p.current_file.is_none());
+    }
+
+    #[test]
+    fn parses_progress_with_kb_rate() {
+        let line = "       32,768   0%    512kB/s    0:00:10";
+        let p = parse_progress_line(line).unwrap();
+        assert_eq!(p.bytes_transferred, 32_768);
+        assert_eq!(p.rate_bps, Some(512 * 1024));
+        assert_eq!(p.eta_seconds, Some(10));
+    }
+
+    #[test]
+    fn returns_filename_for_non_numeric_line() {
+        let p = parse_progress_line("Documents/notes/abc.md").unwrap();
+        assert_eq!(p.current_file.as_deref(), Some("Documents/notes/abc.md"));
+    }
+
+    #[test]
+    fn returns_none_for_empty_line() {
+        assert!(parse_progress_line("").is_none());
+        assert!(parse_progress_line("\r\n").is_none());
     }
 }
