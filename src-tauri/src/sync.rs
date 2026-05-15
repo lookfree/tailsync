@@ -159,6 +159,54 @@ async fn read_until_either<R: tokio::io::AsyncRead + Unpin>(
     }
 }
 
+use std::collections::HashMap;
+use tokio::sync::Mutex as AsyncMutex;
+
+pub type SyncId = String;
+
+pub struct SyncManager {
+    inner: AsyncMutex<HashMap<SyncId, Child>>,
+}
+
+impl SyncManager {
+    pub fn new() -> Self {
+        Self { inner: AsyncMutex::new(HashMap::new()) }
+    }
+
+    pub async fn register(&self, id: SyncId, child: Child) {
+        self.inner.lock().await.insert(id, child);
+    }
+
+    pub async fn cancel(&self, id: &str) -> bool {
+        let mut map = self.inner.lock().await;
+        if let Some(mut child) = map.remove(id) {
+            #[cfg(unix)]
+            {
+                if let Some(pid) = child.id() {
+                    unsafe {
+                        libc::kill(pid as i32, libc::SIGTERM);
+                    }
+                }
+            }
+            let _ = child.wait().await;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub async fn wait_and_remove(&self, id: &str) -> Option<std::process::ExitStatus> {
+        let mut map = self.inner.lock().await;
+        let mut child = map.remove(id)?;
+        drop(map);
+        child.wait().await.ok()
+    }
+}
+
+impl Default for SyncManager {
+    fn default() -> Self { Self::new() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
