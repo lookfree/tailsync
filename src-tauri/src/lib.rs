@@ -1,5 +1,6 @@
 pub mod pairs;
 pub mod excludes;
+pub mod rsync;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
