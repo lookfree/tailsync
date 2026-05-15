@@ -64,6 +64,45 @@ fn parse_device(v: &serde_json::Value, is_self: bool) -> TailnetDevice {
     }
 }
 
+use std::process::Command;
+
+#[derive(Debug, thiserror::Error)]
+pub enum TailscaleError {
+    #[error("tailscale CLI not found in PATH")]
+    NotInstalled,
+    #[error("tailscale exited with status {0}: {1}")]
+    NonZeroExit(i32, String),
+    #[error("failed to invoke tailscale: {0}")]
+    InvokeFailed(#[from] std::io::Error),
+    #[error("failed to parse tailscale output: {0}")]
+    ParseFailed(#[from] serde_json::Error),
+}
+
+/// Invoke `tailscale status --json` and parse it.
+pub fn fetch_status() -> Result<(TailnetDevice, Vec<TailnetDevice>), TailscaleError> {
+    let output = Command::new("tailscale")
+        .args(["status", "--json"])
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                TailscaleError::NotInstalled
+            } else {
+                TailscaleError::InvokeFailed(e)
+            }
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        return Err(TailscaleError::NonZeroExit(
+            output.status.code().unwrap_or(-1),
+            stderr,
+        ));
+    }
+
+    let json = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_tailscale_status(&json)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +159,13 @@ mod tests {
         let (_, peers) = parse_tailscale_status(fixture()).unwrap();
         let off = peers.iter().find(|p| p.hostname == "old-laptop").unwrap();
         assert!(!off.ssh_enabled);
+    }
+
+    #[test]
+    #[ignore = "requires tailscale installed and logged in"]
+    fn fetch_real_status() {
+        let (me, peers) = fetch_status().expect("tailscale status failed");
+        println!("self: {}, peers: {}", me.hostname, peers.len());
+        assert!(!me.hostname.is_empty());
     }
 }
