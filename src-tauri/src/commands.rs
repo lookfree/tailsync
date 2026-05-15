@@ -1,11 +1,64 @@
 use crate::env_check::{check_environment, EnvCheckResult};
 use crate::errors::{AppError, AppResult};
+use crate::excludes::merged_excludes;
 use crate::pairs::{save_pairs, DirectoryPair};
 use crate::remote::{create_remote_dir as remote_mkdir, probe_remote_path as remote_probe, PathProbeResult};
+use crate::rsync::{ProgressUpdate, RsyncConfig};
+use crate::sync::{run_dry_run, spawn_sync, DryRunSummary, SyncResult};
 use crate::tailscale::{fetch_status, TailnetDevice};
 use crate::AppState;
-use tauri::State;
+use serde::Deserialize;
+use std::io::Write;
+use std::sync::Arc;
+use tauri::{Emitter, State};
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Direction { Push, Pull }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SyncRequest {
+    pub pair_id: String,
+    pub direction: Direction,
+}
+
+fn build_config_for(pair: &DirectoryPair, dir: &Direction, dry_run: bool) -> std::io::Result<(RsyncConfig, std::path::PathBuf)> {
+    // Write merged excludes to a tempfile.
+    let merged = merged_excludes(&pair.excludes);
+    let tmp = std::env::temp_dir().join(format!("tailsync-excludes-{}.txt", Uuid::new_v4()));
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        for line in &merged {
+            writeln!(f, "{}", line)?;
+        }
+    }
+
+    let local = ensure_trailing_slash(&pair.local_path);
+    let remote = format!("{}@{}:{}", pair.remote_user, pair.remote_host, ensure_trailing_slash(&pair.remote_path));
+
+    let (source, destination) = match dir {
+        Direction::Push => (local, remote),
+        Direction::Pull => (remote, local),
+    };
+
+    Ok((
+        RsyncConfig {
+            source,
+            destination,
+            excludes_file: Some(tmp.to_string_lossy().into_owned()),
+            bandwidth_limit_kbps: pair.bandwidth_limit_kbps,
+            mirror_mode: pair.mirror_mode,
+            dry_run,
+            timeout_seconds: 300,
+        },
+        tmp,
+    ))
+}
+
+fn ensure_trailing_slash(p: &str) -> String {
+    if p.ends_with('/') { p.to_string() } else { format!("{}/", p) }
+}
 
 #[tauri::command]
 pub fn list_pairs(state: State<AppState>) -> AppResult<Vec<DirectoryPair>> {
@@ -68,7 +121,67 @@ pub async fn probe_remote_path(user: String, host: String, path: String) -> AppR
 pub async fn create_remote_dir(user: String, host: String, path: String) -> AppResult<()> {
     remote_mkdir(&user, &host, &path).await.map_err(AppError::Ssh)
 }
-#[tauri::command] pub fn dry_run_sync() -> AppResult<()> { Ok(()) }
-#[tauri::command] pub fn start_sync() -> AppResult<()> { Ok(()) }
-#[tauri::command] pub fn cancel_sync() -> AppResult<()> { Ok(()) }
+#[tauri::command]
+pub async fn dry_run_sync(state: State<'_, AppState>, req: SyncRequest) -> AppResult<DryRunSummary> {
+    let pair = {
+        let guard = state.pairs.lock().unwrap();
+        guard.iter().find(|p| p.id == req.pair_id)
+            .cloned()
+            .ok_or_else(|| AppError::NotFound(req.pair_id.clone()))?
+    };
+    let (cfg, tmp) = build_config_for(&pair, &req.direction, true)?;
+    let result = run_dry_run(&cfg).await.map_err(|e| AppError::Rsync(e.to_string()));
+    let _ = std::fs::remove_file(&tmp);
+    result
+}
+
+#[tauri::command]
+pub async fn start_sync(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    req: SyncRequest,
+) -> AppResult<String> {
+    let pair = {
+        let guard = state.pairs.lock().unwrap();
+        guard.iter().find(|p| p.id == req.pair_id)
+            .cloned()
+            .ok_or_else(|| AppError::NotFound(req.pair_id.clone()))?
+    };
+    let (cfg, tmp) = build_config_for(&pair, &req.direction, false)?;
+    let task_id = Uuid::new_v4().to_string();
+
+    let app_for_progress = app.clone();
+    let task_id_clone = task_id.clone();
+    let progress: Arc<dyn Fn(ProgressUpdate) + Send + Sync> = Arc::new(move |p| {
+        let _ = app_for_progress.emit(&format!("sync-progress:{}", task_id_clone), p);
+    });
+
+    let (child, stderr_buf) = spawn_sync(&cfg, progress).await
+        .map_err(|e| AppError::Rsync(e.to_string()))?;
+
+    state.sync_manager.register(task_id.clone(), child).await;
+
+    // Background task waits for completion, emits final event, removes from manager.
+    let app_for_done = app.clone();
+    let manager_handle = Arc::clone(&state.sync_manager);
+    let task_id_done = task_id.clone();
+    tokio::spawn(async move {
+        let exit = manager_handle.wait_and_remove(&task_id_done).await;
+        let stderr = stderr_buf.lock().unwrap().clone();
+        let result = SyncResult {
+            exit_code: exit.and_then(|s| s.code()).unwrap_or(-1),
+            message: if exit.map(|s| s.success()).unwrap_or(false) { "完成".into() } else { "失败".into() },
+            stderr_tail: stderr,
+        };
+        let _ = app_for_done.emit(&format!("sync-done:{}", task_id_done), result);
+        let _ = std::fs::remove_file(&tmp);
+    });
+
+    Ok(task_id)
+}
+
+#[tauri::command]
+pub async fn cancel_sync(state: State<'_, AppState>, task_id: String) -> AppResult<bool> {
+    Ok(state.sync_manager.cancel(&task_id).await)
+}
 #[tauri::command] pub fn open_full_disk_access() -> AppResult<()> { Ok(()) }

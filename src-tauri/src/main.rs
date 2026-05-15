@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tailsync_lib::sync::SyncManager;
 use tailsync_lib::AppState;
 
@@ -12,7 +12,7 @@ fn main() {
     let state = AppState {
         pairs: Mutex::new(pairs),
         pairs_path,
-        sync_manager: SyncManager::new(),
+        sync_manager: Arc::new(SyncManager::new()),
     };
 
     tauri::Builder::default()
