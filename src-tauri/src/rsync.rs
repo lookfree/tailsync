@@ -67,6 +67,8 @@ pub fn build_rsync_args(c: &RsyncConfig) -> Vec<String> {
         "--info=progress2".into(),
         "--stats".into(),
         format!("--timeout={}", c.timeout_seconds),
+        "-e".into(),
+        "ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes".into(),
     ];
     if let Some(file) = &c.excludes_file {
         args.push(format!("--exclude-from={}", file));

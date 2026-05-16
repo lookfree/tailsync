@@ -16,7 +16,7 @@ pub async fn probe_remote_path(user: &str, host: &str, path: &str) -> PathProbeR
         shell_escape(path)
     );
     let output = Command::new("ssh")
-        .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", &target, &cmd])
+        .args(["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=5", &target, &cmd])
         .output()
         .await;
 
@@ -40,7 +40,7 @@ pub async fn create_remote_dir(user: &str, host: &str, path: &str) -> Result<(),
     let target = format!("{}@{}", user, host);
     let cmd = format!("mkdir -p {}", shell_escape(path));
     let output = Command::new("ssh")
-        .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", &target, &cmd])
+        .args(["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=5", &target, &cmd])
         .output()
         .await
         .map_err(|e| e.to_string())?;
