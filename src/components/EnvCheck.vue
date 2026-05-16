@@ -20,8 +20,9 @@ onMounted(check);
 const emit = defineEmits<{ ready: [hostname: string] }>();
 
 function proceed() {
-  if (result.value?.tailscale_installed && result.value.tailscale_logged_in && result.value.tailscale_ssh_enabled) {
-    emit('ready', result.value.self_hostname || '');
+  const r = result.value;
+  if (r?.tailscale_installed && r.tailscale_logged_in && r.tailscale_ssh_enabled && r.rsync_modern) {
+    emit('ready', r.self_hostname || '');
   }
 }
 
@@ -45,6 +46,9 @@ watch(result, () => proceed(), { immediate: false });
         <li v-if="result.tailscale_logged_in" :class="{ ok: result.tailscale_ssh_enabled }">
           Tailscale SSH 已启用：{{ result.tailscale_ssh_enabled ? '是' : '否' }}
         </li>
+        <li :class="{ ok: result.rsync_modern }">
+          rsync 3.x 已安装：{{ result.rsync_modern ? '是' : '否' }}
+        </li>
       </ul>
 
       <div v-if="!result.tailscale_installed" class="hint">
@@ -55,6 +59,9 @@ watch(result, () => proceed(), { immediate: false });
       </div>
       <div v-else-if="!result.tailscale_ssh_enabled" class="hint">
         请在终端执行：<code>tailscale set --ssh</code>
+      </div>
+      <div v-else-if="!result.rsync_modern" class="hint">
+        macOS 自带的 openrsync 不支持本工具需要的参数。请在终端执行：<code>brew install rsync</code>
       </div>
 
       <button @click="check">重新检测</button>

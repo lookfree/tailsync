@@ -1,3 +1,37 @@
+use std::path::PathBuf;
+use std::process::Command;
+
+/// Locations checked when the user lacks a modern rsync on PATH.
+/// macOS ships openrsync at /usr/bin/rsync which lacks --info=progress2,
+/// --partial-dir, --bwlimit and friends — we need rsync 3.x.
+const RSYNC_FALLBACK_PATHS: &[&str] = &[
+    "/opt/homebrew/bin/rsync",
+    "/usr/local/bin/rsync",
+];
+
+/// Find a modern rsync (3.x). Returns None if only openrsync or rsync 2.x is present.
+pub fn rsync_binary() -> Option<PathBuf> {
+    for p in RSYNC_FALLBACK_PATHS {
+        let pb = PathBuf::from(p);
+        if pb.exists() && is_modern_rsync(&pb) {
+            return Some(pb);
+        }
+    }
+    let system = PathBuf::from("/usr/bin/rsync");
+    if system.exists() && is_modern_rsync(&system) {
+        return Some(system);
+    }
+    None
+}
+
+fn is_modern_rsync(path: &PathBuf) -> bool {
+    let Ok(out) = Command::new(path).arg("--version").output() else { return false; };
+    let v = String::from_utf8_lossy(&out.stdout);
+    let first = v.lines().next().unwrap_or("");
+    // Reject openrsync (Apple's port) and rsync 2.x; accept rsync 3+.
+    !first.starts_with("openrsync") && !first.contains("version 2.")
+}
+
 #[derive(Debug, Clone)]
 pub struct RsyncConfig {
     /// Source path. For push: local dir. For pull: "user@host:remote/path/".

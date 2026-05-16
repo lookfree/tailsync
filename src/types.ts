@@ -35,6 +35,7 @@ export interface EnvCheckResult {
   tailscale_installed: boolean;
   tailscale_logged_in: boolean;
   tailscale_ssh_enabled: boolean;
+  rsync_modern: boolean;
   self_hostname: string | null;
   error_detail: string | null;
 }

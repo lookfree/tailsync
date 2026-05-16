@@ -64,11 +64,12 @@ fn parse_device(v: &serde_json::Value, is_self: bool) -> TailnetDevice {
     }
 }
 
+use std::path::PathBuf;
 use std::process::Command;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TailscaleError {
-    #[error("tailscale CLI not found in PATH")]
+    #[error("tailscale CLI not found")]
     NotInstalled,
     #[error("tailscale exited with status {0}: {1}")]
     NonZeroExit(i32, String),
@@ -78,9 +79,38 @@ pub enum TailscaleError {
     ParseFailed(#[from] serde_json::Error),
 }
 
+/// Well-known macOS install locations checked when `tailscale` is not on PATH.
+/// macOS GUI apps don't source ~/.zshrc, so brew's PATH entries are typically absent.
+const FALLBACK_PATHS: &[&str] = &[
+    "/usr/local/bin/tailscale",
+    "/opt/homebrew/bin/tailscale",
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+];
+
+/// Find the tailscale binary. Tries PATH first via `which`, then well-known locations.
+pub fn tailscale_binary() -> Option<PathBuf> {
+    if let Ok(output) = Command::new("/usr/bin/which").arg("tailscale").output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let pb = PathBuf::from(&path);
+            if !path.is_empty() && pb.exists() {
+                return Some(pb);
+            }
+        }
+    }
+    for p in FALLBACK_PATHS {
+        let pb = PathBuf::from(p);
+        if pb.exists() {
+            return Some(pb);
+        }
+    }
+    None
+}
+
 /// Invoke `tailscale status --json` and parse it.
 pub fn fetch_status() -> Result<(TailnetDevice, Vec<TailnetDevice>), TailscaleError> {
-    let output = Command::new("tailscale")
+    let binary = tailscale_binary().ok_or(TailscaleError::NotInstalled)?;
+    let output = Command::new(&binary)
         .args(["status", "--json"])
         .output()
         .map_err(|e| {

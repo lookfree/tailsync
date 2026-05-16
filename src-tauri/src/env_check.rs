@@ -1,24 +1,26 @@
 use serde::Serialize;
-use std::process::Command;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EnvCheckResult {
     pub tailscale_installed: bool,
     pub tailscale_logged_in: bool,
     pub tailscale_ssh_enabled: bool,
+    pub rsync_modern: bool,
     pub self_hostname: Option<String>,
     pub error_detail: Option<String>,
 }
 
 pub fn check_environment() -> EnvCheckResult {
-    let installed = which_tailscale();
-    if !installed {
+    let rsync_modern = crate::rsync::rsync_binary().is_some();
+
+    if !which_tailscale() {
         return EnvCheckResult {
             tailscale_installed: false,
             tailscale_logged_in: false,
             tailscale_ssh_enabled: false,
+            rsync_modern,
             self_hostname: None,
-            error_detail: Some("tailscale CLI not found in PATH".into()),
+            error_detail: Some("未找到 tailscale CLI（PATH 和常见安装位置都没有）".into()),
         };
     }
 
@@ -27,6 +29,7 @@ pub fn check_environment() -> EnvCheckResult {
             tailscale_installed: true,
             tailscale_logged_in: !me.hostname.is_empty() && !me.tailscale_ip.is_empty(),
             tailscale_ssh_enabled: me.ssh_enabled,
+            rsync_modern,
             self_hostname: Some(me.hostname),
             error_detail: None,
         },
@@ -34,6 +37,7 @@ pub fn check_environment() -> EnvCheckResult {
             tailscale_installed: true,
             tailscale_logged_in: false,
             tailscale_ssh_enabled: false,
+            rsync_modern,
             self_hostname: None,
             error_detail: Some(e.to_string()),
         },
@@ -41,11 +45,7 @@ pub fn check_environment() -> EnvCheckResult {
 }
 
 fn which_tailscale() -> bool {
-    Command::new("which")
-        .arg("tailscale")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    crate::tailscale::tailscale_binary().is_some()
 }
 
 #[cfg(test)]

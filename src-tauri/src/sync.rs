@@ -1,4 +1,4 @@
-use crate::rsync::{build_rsync_args, parse_progress_line, ProgressUpdate, RsyncConfig};
+use crate::rsync::{build_rsync_args, parse_progress_line, rsync_binary, ProgressUpdate, RsyncConfig};
 use serde::Serialize;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -28,8 +28,12 @@ pub async fn run_dry_run(config: &RsyncConfig) -> std::io::Result<DryRunSummary>
     let mut cfg = config.clone();
     cfg.dry_run = true;
     let args = build_rsync_args(&cfg);
+    let binary = rsync_binary().ok_or_else(|| std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "未找到 rsync 3.x (请执行 brew install rsync)",
+    ))?;
 
-    let output = Command::new("rsync")
+    let output = Command::new(&binary)
         .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -92,7 +96,11 @@ pub async fn spawn_sync(
     progress: ProgressCallback,
 ) -> std::io::Result<(Child, Arc<Mutex<String>>)> {
     let args = build_rsync_args(config);
-    let mut child = Command::new("rsync")
+    let binary = rsync_binary().ok_or_else(|| std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "未找到 rsync 3.x (请执行 brew install rsync)",
+    ))?;
+    let mut child = Command::new(&binary)
         .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
