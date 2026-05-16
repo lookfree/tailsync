@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'tailsync ${{ github.ref_name }}'
+          releaseBody: |
+            两台 Apple Silicon Mac 之间通过 Tailscale 内网做单向文件同步的桌面工具。
+
+            ## 安装
+
+            下载下方的 `.dmg`，双击安装，把 tailsync.app 拖到「应用程序」。
+
+            首次打开会被 Gatekeeper 拦截（未签名应用），到「系统设置 → 隐私与安全性」点"仍要打开"。
+
+            ## 前置条件
+
+            两台机器都需要：
+            - 加入同一个 Tailscale tailnet
+            - 执行过 `tailscale set --ssh` 开启 Tailscale SSH
+            - macOS 自带的 `rsync` 和 `ssh`
+          releaseDraft: false
+          prerelease: false
