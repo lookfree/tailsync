@@ -1,7 +1,7 @@
 use crate::env_check::{check_environment, EnvCheckResult};
 use crate::errors::{AppError, AppResult};
 use crate::excludes::merged_excludes;
-use crate::pairs::{save_pairs, DirectoryPair};
+use crate::pairs::{save_pairs, DirectoryPair, LastSync, SyncDirection, SyncStatus};
 use crate::remote::{create_remote_dir as remote_mkdir, probe_remote_path as remote_probe, PathProbeResult};
 use crate::rsync::{ProgressUpdate, RsyncConfig};
 use crate::sync::{run_dry_run, spawn_sync, DryRunSummary, SyncResult};
@@ -10,7 +10,7 @@ use crate::AppState;
 use serde::Deserialize;
 use std::io::Write;
 use std::sync::Arc;
-use tauri::{Emitter, State};
+use tauri::{Emitter, Manager, State};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -165,6 +165,8 @@ pub async fn start_sync(
     let app_for_done = app.clone();
     let manager_handle = Arc::clone(&state.sync_manager);
     let task_id_done = task_id.clone();
+    let direction_for_record = req.direction.clone();
+    let pair_id_for_record = pair.id.clone();
     tokio::spawn(async move {
         let exit = manager_handle.wait_and_remove(&task_id_done).await;
         let stderr = stderr_buf.lock().unwrap().clone();
@@ -173,6 +175,35 @@ pub async fn start_sync(
             message: if exit.map(|s| s.success()).unwrap_or(false) { "完成".into() } else { "失败".into() },
             stderr_tail: stderr,
         };
+
+        // Update pair's last_sync.
+        let last = LastSync {
+            direction: match direction_for_record {
+                Direction::Push => SyncDirection::Push,
+                Direction::Pull => SyncDirection::Pull,
+            },
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+            status: if exit.map(|s| s.success()).unwrap_or(false) {
+                SyncStatus::Success
+            } else if exit.is_none() {
+                SyncStatus::Interrupted
+            } else {
+                SyncStatus::Failed
+            },
+            message: result.message.clone(),
+        };
+        {
+            let state_handle = app_for_done.state::<AppState>();
+            let mut guard = state_handle.pairs.lock().unwrap();
+            if let Some(p) = guard.iter_mut().find(|p| p.id == pair_id_for_record) {
+                p.last_sync = Some(last);
+            }
+            let _ = save_pairs(&state_handle.pairs_path, &guard);
+        }
+
         let _ = app_for_done.emit(&format!("sync-done:{}", task_id_done), result);
         let _ = std::fs::remove_file(&tmp);
     });
